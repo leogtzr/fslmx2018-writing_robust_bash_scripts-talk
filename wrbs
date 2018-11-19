@@ -1,0 +1,393 @@
+---
+title: Writing Robust Bash Scripts
+author: Leo Gutiérrez | @leonidasgtzr
+patat:
+    wrap: true
+    margins:
+        left: 1
+        right: 0
+...
+
+
+# Leonardo Gutiérrez
+
+- _Twitter:_ @leonidasgtzr
+- _Github:_ @leogtzr
+- _Email:_ leogutierrezramirez@gmail.com
+
+---
+
+    rm -rf "$STEAMROOT/"*
+
+    :) ...
+
+What can go wrong here?
+
+* https://github.com/ValveSoftware/steam-for-linux/issues/3671
+
+---
+
+    cp -r "$LOGS"/* /some_dir/logs
+
+    Boom! disk space issue!
+    :s
+
+---
+
+    #!/bin/bash
+    # Don't run it please ... 
+    rm -rf "$STEAMROOT"/*
+    exit 0
+
+
+WARNING: If you run this code (as root) your files will be gone!
+
+Run it safely, replace the rm with an _echo_ ... 
+
+---
+
+    #!/bin/bash
+    echo rm -rf "$STEAMROOT"/*
+    exit 0
+
+---
+
+     ___________________
+    < How do we fix it? >
+     -------------------
+            \  ^___^
+             \ (ooo)\_______
+               (___)\       )\/\
+                    ||----w |
+                    ||     ||
+
+--- 
+
+    #!/bin/bash
+    set -o nounset
+    rm -rf "$STEAMROOT"/*
+    exit 0
+.
+
+    "${STEAMROOT:?}"
+    "${STEAMROOT:?"is not defined"}"
+
+---
+
+Fail _fast_ with _set -e (set -o errexit)_
+
+    set -e
+    set -o errexit
+
+---
+
+    #!/bin/bash
+    set -o errexit
+    cp "notfound" "x"
+    # something important with x file
+    # ...
+    exit 0
+
+To _disable_ this behaviour you can:
+
+    #!/bin/bash
+    set +o errexit
+    # or set +e
+
+Example:
+
+---
+
+    #!/bin/bash
+    set -o errexit
+    # Critical code.
+
+    # Disable error checking for
+    # non-critical code
+    set +o errexit
+    cp a b
+    echo "Hola"
+
+    # When we are done ...
+    set -o errexit
+
+    echo "Mundo"
+
+    exit 0
+
+---
+
+    #!/bin/bash
+    set -o errexit
+    cp "notfound" "b" || true
+    echo ":)"
+
+    exit 0
+
+Or use | :
+
+    #!/bin/bash
+    set -o errexit
+    cp "notfound" "b" || true
+    cp "notfound" "b" || :
+    echo ":)"
+
+    exit 0
+
+---
+
+Choose a shebang carefully
+
+    #!/bin/bash
+
+is totally different than #!/bin/sh in some systems.
+
+    $ which bash
+    /bin/bash
+    $ which sh
+    /bin/sh
+    $ ls -larth $(which sh)
+    lrwxrwxrwx 1 root root 4 sep 26 23:54 /bin/sh -> dash
+
+So ...
+
+---
+
+IF YOU ARE CODING IN BASH THEN USE BASH SHEBANG!
+
+    #!/bin/bash
+
+---
+
+Don't run your scripts with "sh".
+
+    #!/bin/bash
+    x=1
+    ((x++))
+    echo "x: ${x}"
+
+    exit 0
+
+/bin/sh is not always pointing to the bash binary.
+
+---
+
+If you want to create a POSIX script use 'checkbashisms' script to check your script for bashisms:
+
+    possible bashism in for_bashism.sh line 4 ('((' should be '$(('):
+    ((x++))
+
+---
+
+Use ${var} instead of $var whenever you can.
+
+    /lib/$ENV_app vs. /lib/${ENV}_app
+
+It is one of the most common mistakes ...
+
+---
+
+Use set -o pipefail
+
+    sort 'notfound | uniq && {
+        echo "Life is good :)"
+    }
+
+    #!/bin/bash
+    if sort "notfound" | uniq; then
+        echo "Life is good"
+    fi
+
+    exit 0
+    
+What will be the output?
+
+---
+
+Always use set -o pipefail
+
+    #!/bin/bash
+    if sort "notfound" | uniq; then
+        echo "Life is good"
+    else
+        echo ":)"
+    fi
+
+    exit 0
+
+---
+
+Use _local_ for variables within functions.
+
+Variables in bash have global scope.
+
+    some_function() {
+        for ((i = 0; i < 10; i++)); do
+            printf "Value: %d\n" ${i}
+        done
+    }
+
+    some_function
+    # i variable is still set here.
+    echo "value: ${i}"
+
+Let's fix it.
+
+---
+
+    some_function() {
+        local i
+        for ((i = 0; i < 10; i++)); do
+            printf "Value: %d\n" ${i}
+        done
+    }
+
+    some_function
+    # i variable is still set here.
+    echo "value: ${i}"
+
+---
+
+cron jobs: _"silence is golden"_
+
+Always redirect the output to a file or /dev/null to avoid mails generated automatically by the mail daemon.
+
+
+    < Wait ... what? >
+     ----------------
+            \   ^__^
+             \  (oo)\_______
+                (__)\       )\/\
+                    ||----w |
+                    ||     ||
+
+
+---
+
+    * * * * * /home/leo/code/cron/myjob.sh
+
+myjob.sh code:
+
+    #!/bin/bash
+
+    readonly W_DIR=$(dirname "$(readlink --canonicalize-existing "${0}")")
+    echo "Hola" >> "${W_DIR}/log.txt" 
+    rm not-found
+    echo "WORLD" >> "${W_DIR}/log.txt"
+
+    exit 0
+
+
+This script running in cron will eventually cause disk space issues in the /var disk partition in some systems.
+
+We all want to sleep good and don't receive any dumb call at 3:00 AM ...
+
+---
+
+# Exit your scripts with an explicit exit (n>0) on any non-normal exit.
+
+    readonly conf_file_not_found=81
+
+    if [[ ! -f "${conf_file}" ]]; then
+        # log, mail or send a notification
+        exit ${conf_file_not_found}
+    fi
+
+Just imagine how painful would be to find out that your critical job has been failing for two months ...
+
+---
+
+# Cleaning up resources with trap
+
+    clean() {
+        echo "Cleaning temporary files!"
+        echo "Done"
+        trap - INT TERM EXIT
+        exit 0
+    }
+
+    trap 'clean' EXIT SIGINT SIGTERM
+
+    echo "I am done ... "
+    sleep 30s
+
+    exit 0
+
+---
+
+# Best practices
+
+- Word Splitting (always double quote your variables!)
+- Code your script with long options when you are not in the _CLI._
+- Use _$(...)_ instead of _\`...`_
+- https://www.shellcheck.net                 <:)
+
+---
+
+# Word Splitting & Globbing
+
+    readonly lang="java go rust"
+    for pl in "${lang}"; do
+        echo "[${pl}]"
+    done
+
+- Output
+
+    > * [java go rust]
+
+Fixed code:
+
+        for pl in ${lang}; do
+            echo "[${pl}]"
+        done
+
+---
+
+Globbing
+
+    readonly var='*'
+    echo ${var}
+
+---
+
+_Long options_ vs __short options__ within scripts
+
+	rsync --help ...
+
+---
+
+ _$(...) vs \`...`_
+
+This:
+
+    echo "x is $(sed ... <<< "${y}")"
+is better than:
+    
+    echo "x is `sed ... <<<\"$y\"`"
+
+---
+
+ _shellcheck.net_ - finds bugs in your shell scripts
+
+    $ shellcheck  <script file>
+
+---
+
+__If you find yourself writing something really complex then use another language ... how about go, python or ... ?__
+
+---
+
+Thanks!
+
+---
+
+<!-- Ideas:
+- Word splitting.
+- Quoting.
+
+"If you find yourself writing something really complex then use another language ... how about go, python or ... ?"
+shellcheck
+agenda?
+
+-->
+
